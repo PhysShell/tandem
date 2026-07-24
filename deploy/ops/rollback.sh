@@ -1,21 +1,27 @@
 #!/usr/bin/env bash
 #
 # tandem rollback — roll the *user* Home Manager generation back by one.
-# Refuses root. Fails closed when there is no prior generation. Never touches
-# pacman packages, Tailscale state or root services.
+# Enforces the operator identity contract (refuses root and any wrong user).
+# Fails closed when there is no prior generation. Never touches pacman packages,
+# Tailscale state or root services.
 #
-# Invoked by `nix run .#rollback`, or directly.
+# Invoked by `nix run .#rollback` / `nix run .#rollback-staging`, or directly.
 set -euo pipefail
+
+TANDEM_CMD="rollback"
 
 die() {
   printf 'rollback: FAIL: %s\n' "$*" >&2
   exit 1
 }
 
-# Refuse to run as root — this operates on a *user* profile only.
-if [ "$(id -u)" -eq 0 ]; then
-  die "refusing to run as root; rollback operates on the target user's Home Manager profile"
-fi
+script_dir="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=deploy/ops/identity.sh
+. "$script_dir/identity.sh"
+
+# Enforce identity BEFORE any profile inspection or rollback: refuses root and
+# any user other than the bound target. Exits here on mismatch.
+require_identity
 
 profile="${XDG_STATE_HOME:-$HOME/.local/state}/nix/profiles/home-manager"
 

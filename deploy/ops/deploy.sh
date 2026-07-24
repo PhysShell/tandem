@@ -1,21 +1,28 @@
 #!/usr/bin/env bash
 #
-# tandem deploy — activate the tandem@tandem-vps Home Manager generation from
-# the exact locked flake contents. User-scoped only; never touches root-owned
-# Arch configuration.
+# tandem deploy — activate a Home Manager generation from the exact locked flake
+# contents. User-scoped only; never touches root-owned Arch configuration.
 #
-# Invoked by `nix run .#deploy` (which sets the environment below), or directly
-# with the same variables set.
+# Invoked by `nix run .#deploy` (production) or `nix run .#deploy-staging`, which
+# set the environment below, or directly with the same variables set.
 #
-#   TANDEM_FLAKE    path/URI of the locked flake (exact checked contents)
-#   TANDEM_HM_NAME  home configuration name (default tandem@tandem-vps)
-#   TANDEM_O7_REV   locked 007 revision (informational)
+#   TANDEM_FLAKE        path/URI of the locked flake (exact checked contents)
+#   TANDEM_HM_NAME      home configuration name (e.g. tandem@tandem-vps)
+#   TANDEM_TARGET_USER  OS user this command must run as
+#   TANDEM_TARGET_HOME  that user's expected home
+#   TANDEM_O7_REV       locked 007 revision (informational)
 set -euo pipefail
+
+TANDEM_CMD="deploy"
 
 die() {
   printf 'deploy: FAIL: %s\n' "$*" >&2
   exit 1
 }
+
+script_dir="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=deploy/ops/identity.sh
+. "$script_dir/identity.sh"
 
 flake="${TANDEM_FLAKE:?TANDEM_FLAKE not set (run via: nix run .#deploy)}"
 hm_name="${TANDEM_HM_NAME:-tandem@tandem-vps}"
@@ -28,12 +35,10 @@ if [ "$arch" != "x86_64" ] || [ "$kernel" != "Linux" ]; then
   die "unsupported platform ${kernel}/${arch}; tandem targets x86_64-linux"
 fi
 
-# 2. Refuse to run as root — this activates a *user* profile.
-if [ "$(id -u)" -eq 0 ]; then
-  die "refusing to run as root; deploy activates the target user's Home Manager profile"
-fi
-
-profile="${XDG_STATE_HOME:-$HOME/.local/state}/nix/profiles/home-manager"
+# 2. Enforce the operator identity contract BEFORE any build or activation:
+#    refuses root, and requires the running user/home to match the target and
+#    the selected HM output. Exits here on any mismatch.
+require_identity
 
 echo "deploy: building activation package for ${hm_name} from locked flake…"
 echo "deploy: flake = ${flake}"
@@ -50,4 +55,5 @@ echo "deploy: done."
 echo "deploy: deployed 007 revision : ${o7_rev}"
 echo "deploy: activation package    : ${gen}"
 echo "deploy: current generation:"
-nix-env --profile "${profile}" --list-generations | tail -n1
+nix-env --profile "${XDG_STATE_HOME:-$HOME/.local/state}/nix/profiles/home-manager" \
+  --list-generations | tail -n1

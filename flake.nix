@@ -40,16 +40,31 @@
       o7pkg = o7.packages.${system}.o7;
       o7rev = o7.rev or o7.sourceInfo.rev or "unknown";
 
+      # Identity of each deployment target. The Home Manager output name, the OS
+      # user and its home are ONE unit — see modules + deploy/ops/identity.sh.
+      targets = {
+        production = {
+          hmName = "tandem@tandem-vps";
+          user = "tandem";
+          home = "/home/tandem";
+        };
+        staging = {
+          hmName = "tandem-staging@tandem-vps";
+          user = "tandem-staging";
+          home = "/home/tandem-staging";
+        };
+      };
+
       # One module set, two homes. Staging reuses the identical modules under a
       # different user/home so it validates the real configuration, not a copy.
-      mkHome = { username, homeDirectory }:
+      mkHome = { user, home, ... }:
         home-manager.lib.homeManagerConfiguration {
           inherit pkgs;
           modules = [
             ./home/tandem-vps.nix
             {
-              home.username = username;
-              home.homeDirectory = homeDirectory;
+              home.username = user;
+              home.homeDirectory = home;
             }
           ];
           extraSpecialArgs = { inherit o7pkg o7rev; };
@@ -57,64 +72,65 @@
 
       # Operator commands. The shell lives in reviewable, ShellCheck-able files
       # under deploy/ops/; each app is a thin wrapper that pins the flake path
-      # (`${self}` = the exact locked flake contents) and the target config.
-      mkOp = { name, script, hmName ? "tandem@tandem-vps" }:
+      # (`${self}` = the exact locked flake contents) AND binds the target
+      # identity (output name + OS user + home) so they can never be mixed.
+      mkOp = { name, script, target }:
         pkgs.writeShellApplication {
           inherit name;
           runtimeInputs = [ ];
           text = ''
             export TANDEM_FLAKE="${self}"
-            export TANDEM_HM_NAME="${hmName}"
+            export TANDEM_HM_NAME="${target.hmName}"
+            export TANDEM_TARGET_USER="${target.user}"
+            export TANDEM_TARGET_HOME="${target.home}"
             export TANDEM_O7_REV="${o7rev}"
             exec "${self}/deploy/ops/${script}" "$@"
           '';
         };
 
-      deployApp = mkOp { name = "deploy"; script = "deploy.sh"; };
-      checkApp = mkOp { name = "check"; script = "check.sh"; };
-      rollbackApp = mkOp { name = "rollback"; script = "rollback.sh"; };
+      ops = {
+        deploy = mkOp { name = "deploy"; script = "deploy.sh"; target = targets.production; };
+        check = mkOp { name = "check"; script = "check.sh"; target = targets.production; };
+        rollback = mkOp { name = "rollback"; script = "rollback.sh"; target = targets.production; };
+        deploy-staging = mkOp { name = "deploy-staging"; script = "deploy.sh"; target = targets.staging; };
+        check-staging = mkOp { name = "check-staging"; script = "check.sh"; target = targets.staging; };
+        rollback-staging = mkOp { name = "rollback-staging"; script = "rollback.sh"; target = targets.staging; };
+      };
+
+      mkApp = name: drv: { type = "app"; program = "${drv}/bin/${name}"; };
+
+      # Formatter + linter resolved through THIS repo's locked nixpkgs, so the
+      # result is determined by flake.lock, not the runner's registry.
+      fmtCheck = pkgs.runCommand "check-nixpkgs-fmt" { nativeBuildInputs = [ pkgs.nixpkgs-fmt ]; } ''
+        cd ${self}
+        nixpkgs-fmt --check flake.nix home modules
+        touch "$out"
+      '';
+      shellcheckCheck = pkgs.runCommand "check-shellcheck" { nativeBuildInputs = [ pkgs.shellcheck ]; } ''
+        cd ${self}
+        shopt -s globstar nullglob
+        # Every shell script under deploy/ (ops, arch, ci, tests). `-x` follows
+        # `source` directives so the sourced identity.sh lib is resolved.
+        shellcheck -x deploy/**/*.sh
+        touch "$out"
+      '';
     in
     {
       # Standalone Home Manager configurations. Build with:
       #   nix build .#homeConfigurations."tandem@tandem-vps".activationPackage
       homeConfigurations = {
-        "tandem@tandem-vps" = mkHome {
-          username = "tandem";
-          homeDirectory = "/home/tandem";
-        };
+        "tandem@tandem-vps" = mkHome targets.production;
         # Staging: same modules, throwaway user. See docs/staging.md.
-        "tandem-staging@tandem-vps" = mkHome {
-          username = "tandem-staging";
-          homeDirectory = "/home/tandem-staging";
-        };
+        "tandem-staging@tandem-vps" = mkHome targets.staging;
       };
 
       packages.${system} = {
         # The pinned product binary, exposed for inspection / CI resolution.
         o7 = o7pkg;
         default = o7pkg;
+      } // ops;
 
-        # Operator commands, also available as packages for CI to build
-        # (writeShellApplication runs ShellCheck at build time).
-        deploy = deployApp;
-        check = checkApp;
-        rollback = rollbackApp;
-      };
-
-      apps.${system} = {
-        deploy = {
-          type = "app";
-          program = "${deployApp}/bin/deploy";
-        };
-        check = {
-          type = "app";
-          program = "${checkApp}/bin/check";
-        };
-        rollback = {
-          type = "app";
-          program = "${rollbackApp}/bin/rollback";
-        };
-      };
+      apps.${system} = builtins.mapAttrs mkApp ops;
 
       # Minimal shell for working *on* tandem itself (not deployed to the VPS).
       devShells.${system}.default = pkgs.mkShell {
@@ -124,11 +140,9 @@
       formatter.${system} = pkgs.nixpkgs-fmt;
 
       checks.${system} = {
-        # Cheap, hermetic checks that `nix flake check` will build. The heavier
-        # "activation package builds" is run explicitly in CI (see .github).
-        deploy = deployApp;
-        check = checkApp;
-        rollback = rollbackApp;
-      };
+        # Hermetic, locked-nixpkgs quality gates that `nix flake check` builds.
+        fmt = fmtCheck;
+        shellcheck = shellcheckCheck;
+      } // ops; # building the wrappers also ShellChecks their generated text.
     };
 }

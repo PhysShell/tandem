@@ -5,11 +5,23 @@
 # (WARN never fails). Missing *future* components (o7d, Cockpit) are NOT checked
 # and must never be reported as a T1 failure.
 #
-# Invoked by `nix run .#check` (sets TANDEM_FLAKE / TANDEM_HM_NAME), or directly.
+# Enforces the operator identity contract first: it will only report for the
+# user/output it is bound to (production via `nix run .#check`, staging via
+# `nix run .#check-staging`). Running the staging check as the production user
+# (or vice-versa), or as root, fails closed before any diagnostics.
 set -uo pipefail # NOT -e: every check must run even if one command fails.
+
+TANDEM_CMD="check"
+
+script_dir="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=deploy/ops/identity.sh
+. "$script_dir/identity.sh"
 
 flake="${TANDEM_FLAKE:-}"
 hm_name="${TANDEM_HM_NAME:-tandem@tandem-vps}"
+
+# Identity gate before any reporting (refuses root / wrong user / wrong output).
+require_identity
 
 fails=0
 warns=0
@@ -25,7 +37,7 @@ fail() {
 have() { command -v "$1" >/dev/null 2>&1; }
 
 echo "tandem check — read-only workstation diagnostics"
-echo "target home configuration: ${hm_name}"
+echo "target home configuration: ${hm_name} (user $(id -un))"
 echo
 
 echo "[platform]"
