@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Read-only by default; nothing here needs to write to the repo or packages.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      # DeterminateSystems/nix-installer-action v22
+      - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25
+        with:
+          extra-conf: |
+            experimental-features = nix-command flakes
+
+      # Formatting and ShellCheck are resolved through THIS repo's locked
+      # nixpkgs (flake checks), so the result is determined by flake.lock, not
+      # the runner's nixpkgs registry.
+      - name: Locked formatter check (nixpkgs-fmt)
+        run: nix build --no-link --print-build-logs '.#checks.x86_64-linux.fmt'
+
+      - name: Locked ShellCheck
+        run: nix build --no-link --print-build-logs '.#checks.x86_64-linux.shellcheck'
+
+      - name: nix flake check
+        run: nix flake check --print-build-logs
+
+      # Concretely resolve + build the pinned 007 product from the locked input.
+      - name: Build pinned o7 (locked 007 input)
+        run: nix build --no-link --print-out-paths .#o7 --print-build-logs
+
+      - name: Build production Home Manager activation package
+        run: |
+          nix build --no-link --print-out-paths \
+            '.#homeConfigurations."tandem@tandem-vps".activationPackage' \
+            --print-build-logs
+
+      - name: Build staging Home Manager activation package
+        run: |
+          nix build --no-link --print-out-paths \
+            '.#homeConfigurations."tandem-staging@tandem-vps".activationPackage' \
+            --print-build-logs
+
+      # Operator identity contract: root / wrong-user / mixed output+user all
+      # FAIL; correct identity proceeds; prod vs staging wrappers bind different
+      # identities. Uses shims — never activates anything.
+      - name: Operator identity tests
+        run: bash deploy/tests/identity.sh
+
+      # Arch bootstrap guards: no-mode, non-root --apply, non-Arch --apply fails
+      # before ANY mutation (mutation commands are shimmed to catch regressions),
+      # and read-only --check. Never mutates the runner.
+      - name: Arch bootstrap tests
+        run: bash deploy/tests/bootstrap.sh
+
+      # Nix runtime: daemon unit / enable / user-access / flakes-persistence.
+      # All mutations shimmed; never touches the runner's users/services/store.
+      - name: Nix runtime tests
+        run: bash deploy/tests/nix-runtime.sh
+
+      - name: Secret tripwire
+        run: bash deploy/ci/secret-scan.sh
+
+      - name: Assert the run did not mutate tracked files
+        run: git diff --exit-code

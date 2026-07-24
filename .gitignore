@@ -1,4 +1,17 @@
+# Nix build symlinks
 .direnv/
-.pre-commit-config.yaml
 result
 result-*
+
+# direnv / pre-commit local scaffolding
+.pre-commit-config.yaml
+
+# Local secret / state paths (see docs/secrets.md) — never commit these.
+# Deliberately specific, not a generic catch-all.
+.env
+.env.*
+*.pem
+*.key
+secrets/
+*.authkey
+tailscale-authkey*

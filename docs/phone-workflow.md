@@ -1,33 +1,56 @@
 # Working from the phone
 
-Target: open Claude Code on the VPS from a Pixel 10a (GrapheneOS), survive network
-switches and app kills, reconnect to exactly where you left off.
+Target: open a 007 session on the VPS from a Pixel (GrapheneOS), survive network switches
+and app kills, and reconnect exactly where you left off.
 
 ```
-phone (Termux) ──mosh (udp/60001)──► VPS ──► tmux "main" ──► claude
+Pixel (Termux) ──Tailscale──► mosh ──► tmux "main" ──► o7 / claude / codex
 ```
 
-- **mosh** = the connection. Survives WiFi↔cellular switches, phone sleep, roaming; instant local echo.
-- **tmux** = the session on the server. Keeps `claude` alive even if the phone/app dies. Reattach to find everything intact.
+- **Tailscale** = the network. The VPS is reached by its **tailnet name**, not a public
+  IP, so nothing here depends on a hard-coded address or an open public port.
+- **mosh** = the connection. Survives Wi-Fi↔cellular switches, phone sleep and roaming,
+  with instant local echo.
+- **tmux** = the session on the server. Keeps work alive even if the phone/app dies.
+  Reattach to find everything intact.
+
+Throughout, `<tandem-vps-tailnet-name>` is the placeholder for your VPS's Tailscale
+MagicDNS name (e.g. `tandem-vps` or `tandem-vps.tail1234.ts.net`). **Do not hard-code a
+public IP as the canonical config** — use the tailnet name.
+
+---
 
 ## One-time phone setup
 
-1. Install **Termux** from **F-Droid** (not Play Store — the F-Droid build is the maintained one).
-2. In Termux:
+1. Install the apps, minding the source and signing key:
+   - **Termux** — from **F-Droid** *or* the official **Termux GitHub releases**.
+     Pick one source and stick with it; do **not** mix builds from different
+     signing keys (installs will conflict).
+   - **Tailscale** — from the **official Tailscale Android release** (the APK /
+     package Tailscale publishes) or **Google Play** where appropriate.
+     Note: the **Tailscale build on F-Droid is community-maintained** — it is
+     *independently built and is not released, updated, or verified by
+     Tailscale*. Prefer the official source if you want Tailscale-signed builds.
+
+   Install by hand from these sources. This runbook does **not** automate APK
+   downloads or install packages for you.
+2. Bring the phone onto the same tailnet as the VPS (open the Tailscale app, sign in).
+   Confirm the VPS shows up and is reachable by name.
+3. In Termux:
    ```sh
    pkg update && pkg install mosh openssh
    ```
-3. Get a key onto the phone. **Recommended:** generate a phone-specific key and have it
-   added to the VPS (safer than copying the laptop key around):
+4. Generate a **phone-specific** Ed25519 key (safer than copying a laptop key around):
    ```sh
    ssh-keygen -t ed25519 -f ~/.ssh/tandem-phone -C tandem-phone
-   cat ~/.ssh/tandem-phone.pub      # send this line to be added to tandem@VPS
+   cat ~/.ssh/tandem-phone.pub    # add this line to tandem@VPS:~/.ssh/authorized_keys
    ```
-   (Alternatively copy the existing `test-vps` private key to `~/.ssh/` and `chmod 600` it.)
-4. Optional `~/.ssh/config` in Termux so commands stay short:
+   Adding the public key to the VPS is a manual step you do once, by hand. tandem never
+   touches `authorized_keys` for you.
+5. Termux `~/.ssh/config` so commands stay short — **tailnet name, not an IP**:
    ```
-   Host vps
-       HostName 192.248.184.141
+   Host tandem
+       HostName <tandem-vps-tailnet-name>
        User tandem
        IdentityFile ~/.ssh/tandem-phone
    ```
@@ -35,21 +58,35 @@ phone (Termux) ──mosh (udp/60001)──► VPS ──► tmux "main" ──�
 ## Daily use — one command
 
 ```sh
-mosh -p 60001 vps -- tmux new-session -A -s main
+mosh tandem -- tmux new-session -A -s main
 ```
 
 - `tmux new-session -A -s main` = attach the session named `main`, or create it if absent.
-- Inside, run `claude` once. It keeps running in `main` forever.
-- Phone died / closed Termux / changed networks? Run the **same command** again — you're back in `main` with `claude` right where it was.
+- Inside, run `o7` / `claude` / `codex` once. It keeps running in `main`.
+- Phone died / closed Termux / changed networks? Run the **same command** again — you are
+  back in `main` with the work right where it was.
 
-Without the ssh config, the full form is:
+Without the ssh-config alias, the full form is:
 ```sh
-mosh -p 60001 --ssh="ssh -i ~/.ssh/tandem-phone" tandem@192.248.184.141 -- tmux new-session -A -s main
+mosh --ssh="ssh -i ~/.ssh/tandem-phone" tandem@<tandem-vps-tailnet-name> -- tmux new-session -A -s main
+```
+
+If your mosh build needs an explicit UDP port, add `-p 60001` (and allow that UDP port to
+the VPS **on the tailnet only** — never a public firewall opening).
+
+## Plain-SSH fallback
+
+If mosh ever misbehaves, plain SSH reaches the identical tmux session (you lose only
+mosh's roaming/echo niceties):
+
+```sh
+ssh -t tandem tmux new-session -A -s main
 ```
 
 ## tmux on a touch keyboard
 
-Prefix is **Ctrl-b** (Termux's extra-keys row has a Ctrl key).
+Prefix is **Ctrl-b** (Termux's extra-keys row has a Ctrl key). This matches
+[`modules/terminal.nix`](../modules/terminal.nix).
 
 | Do | Keys |
 |---|---|
@@ -57,16 +94,50 @@ Prefix is **Ctrl-b** (Termux's extra-keys row has a Ctrl key).
 | New window | `Ctrl-b` then `c` |
 | Next / previous window | `Ctrl-b` then `n` / `p` |
 | Split panes | `Ctrl-b` then `\|` or `-` |
-| Scroll back | just touch-drag (mouse mode is on) |
+| Scroll back | touch-drag (mouse mode is on) |
 | Reload config | `Ctrl-b` then `r` |
 
-Detaching is safe and normal — the agent keeps working. You only ever "lose" a session
-if the VPS itself reboots (then `claude --resume` picks the conversation back up).
+> The Home Manager tmux config is written to `~/.config/tmux/tmux.conf`. If an older
+> hand-written `~/.tmux.conf` exists it takes precedence — remove or rename it so the
+> managed config applies.
 
-## Fallback (if mosh ever misbehaves)
+---
 
-Plain SSH still reaches the same tmux session:
-```sh
-ssh -t vps tmux new-session -A -s main
-```
-You lose mosh's roaming/echo niceties but the persistent session is identical.
+## Acceptance checks (phone field tests)
+
+Run these from the phone; they are **manual** and are reported as `NOT EXECUTED` until
+actually performed on real hardware.
+
+1. **Reachability** — `mosh tandem -- true` connects over the tailnet by name.
+2. **Wi-Fi ↔ mobile-data reconnect** — attach `main`, start a long-running command,
+   toggle Wi-Fi off (fall back to mobile data) and back. mosh should re-establish and the
+   session should still be running.
+3. **Forced Termux shutdown** — force-stop Termux from Android app settings mid-session,
+   reopen, re-run the daily command. You should land back in `main`, work intact.
+
+## What persistence means today vs. later
+
+Two different failures — a **phone/UI disconnect** and a **host restart** — have
+different outcomes. Keep them separate. **No process, tmux or o7d, survives a VPS
+reboot** — a reboot kills every process on the box.
+
+**Today** (tmux):
+
+> - **Phone/UI disconnect:** a process **owned by tmux** keeps running; reattach
+>   and it is still there.
+> - **Host restart:** the tmux session and its processes are gone. There is no
+>   automatic record of where you were; you restart the work by hand
+>   (e.g. `claude --resume` / re-launch `o7`).
+
+**Future** (o7d, arrives at roadmap **T2** — *not implemented here*):
+
+> - **Phone/UI disconnect:** an o7d-owned run stays alive, and missed events
+>   **replay from the ledger** on reconnect.
+> - **Host restart:** the process is **gone** — it does **not** survive the
+>   reboot. The previous attempt is recorded as *interrupted*, and the persisted
+>   ledger state permits an explicit recovery or a fresh resume attempt. What
+>   improves over tmux is the honest interrupted-state record and replay — **not**
+>   process survival across a reboot.
+
+That future behaviour is **not implemented yet**. Today, rely on tmux persistence
+for disconnects and expect to restart work by hand after a reboot.
