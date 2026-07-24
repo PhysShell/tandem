@@ -67,9 +67,12 @@ story (tmux today; o7d + ledger replay once T2 lands).
 
 ## Operating principles
 
-- **UI death ≠ agent death.** Today a dead phone/UI does not kill a process owned by tmux.
-  The stronger guarantee — a run owned by `o7d`, with missed events replayed from the
-  ledger — belongs to 007 and lands here only at **T2+**. It is **not** implemented yet.
+- **UI death ≠ agent death — but reboot ≠ survival.** Today a phone/UI disconnect does
+  not kill a process owned by tmux. A **host reboot kills everything** — no tmux or o7d
+  process survives it. The stronger *disconnect* guarantee — a run owned by `o7d` with
+  missed events replayed from the ledger, and an interrupted attempt recorded across a
+  reboot for explicit recovery (not process survival) — belongs to 007 and lands here only
+  at **T2+**. It is **not** implemented yet. See `docs/phone-workflow.md`.
 - **Honest state.** Never report a stage as done because its code exists; a stage is done
   when it is demonstrated on the target. Field tests that were not run are reported as
   `NOT EXECUTED`, never invented.

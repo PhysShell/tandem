@@ -22,7 +22,18 @@ public IP as the canonical config** — use the tailnet name.
 
 ## One-time phone setup
 
-1. Install **Termux** and **Tailscale** from **F-Droid** (the maintained builds).
+1. Install the apps, minding the source and signing key:
+   - **Termux** — from **F-Droid** *or* the official **Termux GitHub releases**.
+     Pick one source and stick with it; do **not** mix builds from different
+     signing keys (installs will conflict).
+   - **Tailscale** — from the **official Tailscale Android release** (the APK /
+     package Tailscale publishes) or **Google Play** where appropriate.
+     Note: the **Tailscale build on F-Droid is community-maintained** — it is
+     *independently built and is not released, updated, or verified by
+     Tailscale*. Prefer the official source if you want Tailscale-signed builds.
+
+   Install by hand from these sources. This runbook does **not** automate APK
+   downloads or install packages for you.
 2. Bring the phone onto the same tailnet as the VPS (open the Tailscale app, sign in).
    Confirm the VPS shows up and is reachable by name.
 3. In Termux:
@@ -106,16 +117,27 @@ actually performed on real hardware.
 
 ## What persistence means today vs. later
 
+Two different failures — a **phone/UI disconnect** and a **host restart** — have
+different outcomes. Keep them separate. **No process, tmux or o7d, survives a VPS
+reboot** — a reboot kills every process on the box.
+
 **Today** (tmux):
 
-> Phone/UI death does not kill a process **owned by tmux**. You reattach and it is still
-> running. But if the **VPS itself reboots**, the tmux session is gone — you restart the
-> work (e.g. `claude --resume` / re-launch `o7`).
+> - **Phone/UI disconnect:** a process **owned by tmux** keeps running; reattach
+>   and it is still there.
+> - **Host restart:** the tmux session and its processes are gone. There is no
+>   automatic record of where you were; you restart the work by hand
+>   (e.g. `claude --resume` / re-launch `o7`).
 
-**Future** (o7d, arrives at roadmap **T2**, not implemented here):
+**Future** (o7d, arrives at roadmap **T2** — *not implemented here*):
 
-> Phone/UI death does not kill a run **owned by o7d**, and missed events **replay from the
-> ledger** on reconnect — so a run survives even a host restart.
+> - **Phone/UI disconnect:** an o7d-owned run stays alive, and missed events
+>   **replay from the ledger** on reconnect.
+> - **Host restart:** the process is **gone** — it does **not** survive the
+>   reboot. The previous attempt is recorded as *interrupted*, and the persisted
+>   ledger state permits an explicit recovery or a fresh resume attempt. What
+>   improves over tmux is the honest interrupted-state record and replay — **not**
+>   process survival across a reboot.
 
-That future guarantee is **not implemented yet**. Do not rely on it; rely on tmux
-persistence and the VPS-reboot caveat above.
+That future behaviour is **not implemented yet**. Today, rely on tmux persistence
+for disconnects and expect to restart work by hand after a reboot.
