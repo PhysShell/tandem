@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Read-only by default; nothing here needs to write to the repo or packages.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      # DeterminateSystems/nix-installer-action v22
+      - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25
+        with:
+          extra-conf: |
+            experimental-features = nix-command flakes
+
+      - name: Flake formatting (nixpkgs-fmt --check)
+        run: nix run nixpkgs#nixpkgs-fmt -- --check .
+
+      - name: ShellCheck all shell scripts
+        run: |
+          nix run nixpkgs#shellcheck -- \
+            deploy/ops/deploy.sh \
+            deploy/ops/check.sh \
+            deploy/ops/rollback.sh \
+            deploy/arch/bootstrap.sh \
+            deploy/arch/check-host.sh
+
+      - name: nix flake check
+        run: nix flake check --print-build-logs
+
+      # Concretely resolve + build the pinned 007 product from the locked input.
+      - name: Build pinned o7 (locked 007 input)
+        run: nix build --no-link --print-out-paths .#o7 --print-build-logs
+
+      - name: Build production Home Manager activation package
+        run: |
+          nix build --no-link --print-out-paths \
+            '.#homeConfigurations."tandem@tandem-vps".activationPackage' \
+            --print-build-logs
+
+      - name: Build staging Home Manager activation package
+        run: |
+          nix build --no-link --print-out-paths \
+            '.#homeConfigurations."tandem-staging@tandem-vps".activationPackage' \
+            --print-build-logs
+
+      # Safe CI mode for the host bootstrap: the read-only inspector runs without
+      # mutation. On a non-Arch GitHub runner it is EXPECTED to report FAILs
+      # (not Arch, no tailscale, no target user); we assert only that it runs and
+      # changes nothing. Running `--apply` and a real Arch `--check` are MANUAL
+      # acceptance items — they cannot run honestly here. See docs/staging.md.
+      - name: bootstrap --check runs read-only (FAILs expected off-Arch)
+        run: ./deploy/arch/bootstrap.sh --check --user runner || true
+
+      - name: Assert scripts did not mutate the runner
+        run: git diff --exit-code
+
+      - name: Secret tripwire (no committed key material)
+        run: |
+          if git grep -nE 'BEGIN (RSA|OPENSSH|EC|DSA|PGP) PRIVATE KEY|tskey-[A-Za-z0-9]{6,}' \
+              -- . ':!.github'; then
+            echo "::error::Potential secret material committed" >&2
+            exit 1
+          fi
+          echo "no committed key material found"

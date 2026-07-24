@@ -1,75 +1,79 @@
-# Roadmap
+# Deployment roadmap
 
-Build order toward a phone-first cockpit for coding agents. Each stage is usable on its
-own; we only move on when the previous one earns its keep. Distilled from the 007 /
-Sandboy design notes.
+This is a **deployment and operations** roadmap for one phone-first 007 workstation. It is
+deliberately *not* the 007 product roadmap — the product's build order (o7d, event
+protocol, Cockpit, adapters, ledger) lives in
+[`PhysShell/007`](https://github.com/PhysShell/007). Stages here describe *bringing a host
+online and keeping it operable*, not building features.
 
-Guiding principles:
-- **UI death ≠ agent death.** The agent process outlives any client, tab, or phone.
-- **Honest state.** Never show `running` for something that a reboot actually killed.
-- **Deterministic veto.** The sandbox and an explicit policy have the final say over any
-  model-side "auto" decision — allow can be overridden to deny, never the reverse.
-- **Exact model.** No silent fallback model; a drift trips a kill switch.
-- **Build lean.** The VPS is 1 core / 2 GB. Favor a small daemon + thin UI over a heavy
-  Next.js build running on the box.
+Legend: ✅ done · 🚧 in progress · ⏳ planned
 
 ---
 
-## S0 — Working access ✅ (done)
+## T0 — Tailscale + mosh + tmux baseline 🚧
 
-Phone → mosh → VPS → tmux → Claude Code, subscription OAuth, no API key. Key-only SSH,
-persistent tmux session. This is the floor everything else stands on.
+The phone can reach the VPS over a persistent, disconnect-proof session.
 
-## S1 — Session registry (read-only)
+- ✅ mosh + tmux persistence proven (phone → VPS → tmux `main`, survives Wi-Fi↔cellular
+  switches and app kills). This is the floor everything else stands on.
+- 🚧 Tailscale as the transport. The runbook
+  ([`docs/phone-workflow.md`](docs/phone-workflow.md)) is now Tailscale-first
+  (`<tandem-vps-tailnet-name>` over MagicDNS), but **joining the tailnet
+  (`tailscale up`) is a manual operator step and is not claimed as executed here.**
 
-Index every Claude/Codex session from `~/.claude/projects/**/*.jsonl` into a SQLite cache
-(project, branch, model, first/last message, tokens, full-text search). Sources stay
-read-only; scan is incremental (mtime-based). Deliver: search + list old runs by content.
+## T1 — Arch workstation foundation 🚧
 
-## S2 — Persistent agent worker (the core shift)
+*This repository.* Reproducible, rollback-able deployment of the workstation:
 
-Run Claude as a **long-lived Agent SDK worker per active session**, not a series of
-one-shot `claude -p`. A small daemon (`o7d`) owns the workers; the UI only subscribes.
-- Worker survives UI/phone death; reconnect replays missed events.
-- **Live permission-mode switch** (plan / ask / acceptEdits / auto / bypass) without
-  changing the session id. UI shows `requested` vs `effective` — never a lit button that
-  lies about the underlying process.
-- `bypass` is only *available* when sandbox attestation == enforced.
+- Standalone Home Manager config (`tandem@tandem-vps`) with a minimal toolset;
+- pinned 007 build exposed as `o7`;
+- `nix run .#deploy` / `#check` / `#rollback`;
+- root-owned Arch bootstrap with explicit `--check` / `--apply`;
+- a staging user path for safe validation.
 
-## S3 — Lifecycle + recovery
+Delivered as code and validated by CI. **Field activation on the real VPS is a manual
+acceptance step** (see [`docs/staging.md`](docs/staging.md)) and is not marked done until
+executed on the box.
 
-Explicit state machine: `idle · running · waiting · stalled · crashed · completed ·
-needs-human`. Append-only event log with monotonic sequence numbers per conversation, so
-the client resumes with `?after=<seq>` — no lost messages, no dupes across reconnects.
-Recovery **intent**: before a risky step the agent records its own next instruction, not a
-blind generic "continue".
+## T2 — pinned o7d deployment ⏳
 
-## S4 — Workspace restore
+When `o7d` exists in 007, deploy it as a **user** systemd service (linger already enabled
+in T1), pinned the same way `o7` is. No o7d implementation happens here — tandem only gains
+the deployment slot. Until then, persistence is tmux's job, not o7d's.
 
-Restore the whole workspace after a crash, not just a URL list: open chats + order,
-drafts, selected agent, permission mode, model lock, scroll, open diff, last event cursor.
-One "Restore all" button. Honest post-reboot status: `INTERRUPTED_BY_HOST_RESTART`, with
-enough saved (session id, branch, worktree, last tool call) to resume as a new attempt.
+## T3 — persistent state and backup ⏳
 
-## S5 — Sandbox + delegation
+A durable, backed-up state directory for the ledger and workstation state, with a
+documented restore. T1 only *documents* the slot; no backup tooling is shipped yet.
 
-Fence the agent process tree with **sandboy** (syscall/filesystem/network boundary);
-privileged tandem tools stay RPC calls into the daemon, never in-process functions with
-host access. Delegation contract for child agents: commit the work, return branch/commit +
-artifacts + a structured DONE/FAILED — evidence, not a claim.
+## T4 — private Cockpit publication through Tailscale ⏳
 
-## S6 — Cockpit UI
+Publish the (007-provided) Cockpit UI privately over the tailnet — Tailscale Serve to
+tailnet peers only. **No Funnel, no public exposure.** tandem does not implement Cockpit.
 
-Thin mobile web/PWA over the daemon's event stream. Top bar: model (exact, locked),
-permission mode, sandbox state, run status, rate-limit meters (`five_hour`, `seven_day`,
-`opus`). At 80–90% of the 5-hour or Opus window, auto fan-out/delegation is disabled.
+## T5 — upgrade and rollback ⏳
+
+Deliberate upgrade flow: `nix flake update`, review the revision delta, redeploy, and a
+rehearsed rollback. T1 ships the rollback primitive (`nix run .#rollback`); T5 makes the
+whole upgrade loop a routine.
+
+## T6 — phone-first end-to-end acceptance ⏳
+
+The full acceptance pass from the phone: reachability, mosh reconnect across network
+switches, Termux force-stop and reconnect, VPS-reboot behavior, and the honest persistence
+story (tmux today; o7d + ledger replay once T2 lands).
 
 ---
 
-## Notes / open questions
+## Operating principles
 
-- **Compute:** the cockpit UI may need to run off-box or be kept minimal; the 2 GB VPS is
-  fine for the daemon + Claude workers but not a heavy JS build server.
-- **Auth:** subscription OAuth (`claude setup-token` / login) is fine for single-owner use.
-  It must **not** become a multi-user service on one OAuth token — that needs an API key.
-- **Model policy:** disable `fallbackModel`; treat any fallback as a drift event.
+- **UI death ≠ agent death.** Today a dead phone/UI does not kill a process owned by tmux.
+  The stronger guarantee — a run owned by `o7d`, with missed events replayed from the
+  ledger — belongs to 007 and lands here only at **T2+**. It is **not** implemented yet.
+- **Honest state.** Never report a stage as done because its code exists; a stage is done
+  when it is demonstrated on the target. Field tests that were not run are reported as
+  `NOT EXECUTED`, never invented.
+- **Build lean.** 1 core / 2 GB. Favour the pinned daemon + thin tooling over anything
+  heavy on the box. No decorative packages.
+- **Deliberate upgrades.** 007 and Arch are upgraded on purpose, reviewed, and
+  rollback-able — never automatically.
