@@ -31,8 +31,9 @@ set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 user="tandem"
 mode=""
-# Overridable only for safe testing (default is the real host file).
+# Overridable only for safe testing (defaults are the real host paths).
 os_release="${TANDEM_OS_RELEASE:-/etc/os-release}"
+unit_dir="${TANDEM_SYSTEMD_UNIT_DIR:-/usr/lib/systemd/system}"
 
 die() {
   printf 'bootstrap: FAIL: %s\n' "$*" >&2
@@ -150,19 +151,37 @@ else
   echo "  all required packages already present"
 fi
 
-# 2. Enable + start the two required system daemons. Idempotent.
+# 2. Establish the Nix daemon runtime. The Arch `nix` package SHIPS the systemd
+#    units (nix-daemon.service + nix-daemon.socket) but, per Arch policy, does
+#    NOT enable them on install. We standardize on the always-on service
+#    (nix-daemon.service, WantedBy=multi-user.target) to avoid the socket-vs-
+#    service bind conflict when a host may already run one. Idempotent.
+echo
+if [ ! -f "$unit_dir/nix-daemon.service" ]; then
+  die "nix-daemon.service unit is missing from ${unit_dir}; is the Arch 'nix' package correctly installed?"
+fi
+if systemctl is-enabled nix-daemon.socket >/dev/null 2>&1; then
+  # Host already uses socket activation — respect it, just make sure it runs.
+  echo "  nix daemon: socket activation already enabled; ensuring active"
+  systemctl start nix-daemon.socket
+else
+  echo "  nix daemon: enabling nix-daemon.service (enable --now)"
+  systemctl enable --now nix-daemon.service
+fi
+
+# 3. Enable + start the two required system daemons. Idempotent.
 echo
 for unit in sshd tailscaled; do
   echo "  enabling ${unit} (enable --now)"
   systemctl enable --now "$unit"
 done
 
-# 3. Enable user lingering so tmux / the future o7d survive logout. Idempotent.
+# 4. Enable user lingering so tmux / the future o7d survive logout. Idempotent.
 echo
 echo "  enabling lingering for ${user}"
 loginctl enable-linger "$user"
 
-# 4. Create required user directories with correct ownership. Idempotent.
+# 5. Create required user directories with correct ownership. Idempotent.
 echo
 home="$(getent passwd "$user" | cut -d: -f6)"
 group="$(id -gn "$user")"
@@ -178,8 +197,21 @@ echo
 
 cat <<EOF
 
+Nix daemon access & first deployment
+  * No re-login is required for Nix: the current Arch 'nix' package needs NO
+    supplementary group (the daemon socket /nix/var/nix/daemon-socket/socket is
+    mode 0666). We add no group, so there is nothing to re-login for.
+  * Test daemon access as ${user}:
+        sudo -iu ${user} nix --extra-experimental-features nix-command \\
+            store info --store daemon
+  * FIRST Home Manager deployment (a clean Arch host has flakes DISABLED, so
+    pass the features explicitly this one time):
+        sudo -iu ${user} bash -lc 'cd /path/to/tandem && \\
+            nix --extra-experimental-features "nix-command flakes" run .#deploy'
+  * AFTER that activation, Home Manager owns ~/.config/nix/nix.conf, so the short
+    forms work:  nix run .#check | .#deploy | .#rollback
+
 MANUAL follow-ups — bootstrap deliberately does NOT do these:
   * Join the tailnet (interactive; no key is embedded):   sudo tailscale up
   * Review any non-loopback listeners printed above and your firewall policy by hand.
-  * Deploy the user environment as ${user}:               nix run .#deploy
 EOF

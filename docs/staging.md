@@ -55,10 +55,12 @@ sudo loginctl enable-linger tandem-staging
 
 ### 3. Build the activation package (any user — no activation yet)
 
-Build with an explicit absolute path so it does not depend on the caller's cwd:
+Build with an explicit absolute path so it does not depend on the caller's cwd
+(explicit features so it also works before flakes are persisted on a clean host):
 
 ```sh
-nix build --no-link --print-out-paths \
+nix --extra-experimental-features "nix-command flakes" \
+  build --no-link --print-out-paths \
   "path:${TANDEM_CHECKOUT}#homeConfigurations.\"tandem-staging@tandem-vps\".activationPackage"
 ```
 
@@ -73,13 +75,19 @@ sudo -iu tandem-staging \
   env TANDEM_CHECKOUT="$TANDEM_CHECKOUT" \
   bash -lc '
     cd "$TANDEM_CHECKOUT"
-    nix run .#deploy-staging
+    nix --extra-experimental-features "nix-command flakes" run .#deploy-staging
   '
 ```
 
 `deploy-staging` enforces the identity contract (it must be run as
 `tandem-staging` with home `/home/tandem-staging`), builds from the locked flake,
 and activates — registering generation 1.
+
+> **Why `--extra-experimental-features` here?** A brand-new `tandem-staging` user
+> has no `~/.config/nix/nix.conf` yet, and the Arch package's `/etc/nix/nix.conf`
+> does not enable flakes. The first activation therefore passes the features
+> explicitly. That activation installs the Home Manager-owned user config, so
+> from step 5 onward the short `nix run .#…-staging` forms work as written.
 
 > Equivalent raw form (also correct), if you prefer to see the package first:
 >

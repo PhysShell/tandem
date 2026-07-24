@@ -66,6 +66,11 @@ jobs:
       - name: Arch bootstrap tests
         run: bash deploy/tests/bootstrap.sh
 
+      # Nix runtime: daemon unit / enable / user-access / flakes-persistence.
+      # All mutations shimmed; never touches the runner's users/services/store.
+      - name: Nix runtime tests
+        run: bash deploy/tests/nix-runtime.sh
+
       - name: Secret tripwire
         run: bash deploy/ci/secret-scan.sh
 

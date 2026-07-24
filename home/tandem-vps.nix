@@ -7,6 +7,7 @@
     ../modules/workstation.nix
     ../modules/terminal.nix
     ../modules/o7.nix
+    ../modules/nix.nix
   ];
 
   # Intentional, pinned state version. Home Manager uses it to keep stateful

@@ -29,11 +29,14 @@ The phone can reach the VPS over a persistent, disconnect-proof session.
 - pinned 007 build exposed as `o7`;
 - `nix run .#deploy` / `#check` / `#rollback`;
 - root-owned Arch bootstrap with explicit `--check` / `--apply`;
+- the **clean Arch → Nix → deploy** chain: enable the packaged `nix-daemon.service`,
+  confirm keyless daemon access (no `nix-users` group on current Arch), and persist
+  `nix-command`/`flakes` per user via Home Manager (see README);
 - a staging user path for safe validation.
 
-Delivered as code and validated by CI. **Field activation on the real VPS is a manual
-acceptance step** (see [`docs/staging.md`](docs/staging.md)) and is not marked done until
-executed on the box.
+Delivered as code and validated by CI. **Field activation on the real VPS — and the
+clean-host Nix path in particular — is a manual acceptance step** (see
+[`docs/staging.md`](docs/staging.md)) and is not marked done until executed on the box.
 
 ## T2 — pinned o7d deployment ⏳
 

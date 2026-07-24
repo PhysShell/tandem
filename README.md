@@ -84,6 +84,36 @@ sudo ./deploy/arch/bootstrap.sh --check    # read-only
 sudo ./deploy/arch/bootstrap.sh --apply    # idempotent minimal setup
 ```
 
+## Clean Arch → Nix → first deploy
+
+On a fresh Arch host, installing the `nix` package is **not** enough to run
+`nix run .#deploy`. `bootstrap.sh --apply` closes the gaps, and the chain is:
+
+1. **Daemon.** The Arch `nix` package ships the systemd units but (per Arch policy) does
+   not enable them. Bootstrap enables the packaged **`nix-daemon.service`** (idempotent).
+   *Evidence:* the package installs `/usr/lib/systemd/system/nix-daemon.{service,socket}`;
+   we standardize on the always-on service to avoid a socket-vs-service bind conflict.
+2. **User access — no group needed.** The current Arch package creates **no `nix-users`
+   group**; the daemon socket `/nix/var/nix/daemon-socket/socket` is mode `0666`, so any
+   user can connect. Bootstrap adds no group, so **no logout/login is required**. Verify:
+   ```sh
+   sudo -iu tandem nix --extra-experimental-features nix-command store info --store daemon
+   ```
+3. **Flakes.** The pristine package `/etc/nix/nix.conf` does **not** enable
+   `nix-command`/`flakes`. So the **first** deploy passes them explicitly, once:
+   ```sh
+   sudo -iu tandem bash -lc 'cd /path/to/tandem && \
+     nix --extra-experimental-features "nix-command flakes" run .#deploy'
+   ```
+   That activation makes Home Manager own the user's `~/.config/nix/nix.conf` (see
+   [`modules/nix.nix`](modules/nix.nix)), enabling the features for both production and
+   staging. **After** it, the short forms just work: `nix run .#check | .#deploy |
+   .#rollback`. We never rewrite the package-owned `/etc/nix/nix.conf`.
+
+`check-host.sh` reports each of these separately (binary, packaged unit, enabled,
+active/listening, user daemon access, flakes status) — a present `/usr/bin/nix` alone is
+**not** a PASS.
+
 ## The pinned 007 revision
 
 The deployed product is fixed by `flake.lock`. To see exactly which revision is (or will
