@@ -53,11 +53,12 @@ req_bin() { # binary label
 echo "tandem host check (read-only) — target user: ${user}"
 echo
 
+osr="${TANDEM_OS_RELEASE:-/etc/os-release}"
 echo "[base system]"
-if [ -r /etc/os-release ] && grep -qi '^ID=arch' /etc/os-release; then
+if [ -r "$osr" ] && grep -qi '^ID=arch' "$osr"; then
   pass "Arch Linux"
 else
-  warn "not detected as Arch Linux (this foundation targets Arch)"
+  fail "not Arch Linux (this foundation targets Arch; refusing to treat as OK)"
 fi
 if have systemctl && [ -d /run/systemd/system ]; then
   pass "systemd is the init system"

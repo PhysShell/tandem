@@ -12,7 +12,8 @@
 # --apply is idempotent by construction: it only installs packages whose marker
 # binary is missing, uses `systemctl enable --now` / `loginctl enable-linger`
 # (both idempotent), and `install -d` (create-if-absent). Running it twice makes
-# no further changes.
+# no further changes. It also FAILS CLOSED: all host preconditions are checked
+# before any mutation command runs.
 #
 # ---------------------------------------------------------------------------
 # PROHIBITIONS — this script MUST NOT, and does NOT:
@@ -30,6 +31,13 @@ set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 user="tandem"
 mode=""
+# Overridable only for safe testing (default is the real host file).
+os_release="${TANDEM_OS_RELEASE:-/etc/os-release}"
+
+die() {
+  printf 'bootstrap: FAIL: %s\n' "$*" >&2
+  exit 1
+}
 
 usage() {
   cat >&2 <<EOF
@@ -85,17 +93,24 @@ fi
 
 # -------------------------------- --apply ----------------------------------
 if [ "$(id -u)" -ne 0 ]; then
-  echo "bootstrap --apply: must run as root (use sudo)." >&2
-  exit 1
+  die "--apply must run as root (use sudo)."
 fi
 
-if ! getent passwd "$user" >/dev/null 2>&1; then
-  echo "bootstrap --apply: target user '$user' does not exist; create it first." >&2
-  echo "  tandem never creates or deletes users. For the staging user see docs/staging.md." >&2
-  exit 1
-fi
+# FAIL CLOSED: verify every host precondition BEFORE any mutation. Nothing below
+# runs pacman / systemctl / loginctl / install until all of these pass.
+assert_apply_preconditions() {
+  [ -r "$os_release" ] || die "cannot read ${os_release}; refusing to mutate an unknown host"
+  grep -qi '^ID=arch' "$os_release" || die "host is not Arch Linux (ID=arch required in ${os_release}); refusing to mutate"
+  [ -d /run/systemd/system ] || die "systemd is not the active init; refusing to mutate"
+  command -v pacman >/dev/null 2>&1 || die "pacman not found; refusing to mutate"
+  command -v systemctl >/dev/null 2>&1 || die "systemctl not found; refusing to mutate"
+  command -v loginctl >/dev/null 2>&1 || die "loginctl not found; refusing to mutate"
+  getent passwd "$user" >/dev/null 2>&1 || die "target user '$user' does not exist; create it first (tandem never creates users)"
+  [ -n "$(getent passwd "$user" | cut -d: -f6)" ] || die "cannot resolve home for '$user'; refusing to mutate"
+}
+assert_apply_preconditions
 
-echo "bootstrap --apply: target user = ${user}"
+echo "bootstrap --apply: preconditions OK. target user = ${user}"
 echo
 
 # 1. Install missing required Arch packages. Idempotent: only packages whose
