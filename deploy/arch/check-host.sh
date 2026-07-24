@@ -49,6 +49,18 @@ req_bin() { # binary label
     fail "$2 missing"
   fi
 }
+# A nix.conf enables the flake workflow only when BOTH nix-command AND flakes are
+# present. Nix merges `experimental-features` and `extra-experimental-features`,
+# so we take the union across both keys. Same rule for user and system config.
+features_enabled() { # nix.conf-file
+  local f="$1" vals
+  [ -r "$f" ] || return 1
+  vals="$(grep -Ei '^[[:space:]]*(extra-)?experimental-features[[:space:]]*=' "$f" 2>/dev/null)"
+  [ -n "$vals" ] || return 1
+  printf '%s\n' "$vals" | grep -qw 'nix-command' || return 1
+  printf '%s\n' "$vals" | grep -qw 'flakes' || return 1
+  return 0
+}
 
 echo "tandem host check (read-only) — target user: ${user}"
 echo
@@ -127,12 +139,12 @@ else
   warn "nix missing; cannot test daemon access"
 fi
 
-# 6. flakes / nix-command bootstrap status (user config, else system, else WARN)
-uconf="$(getent passwd "$user" 2>/dev/null | cut -d: -f6)/.config/nix/nix.conf"
-if grep -Eqs 'experimental-features.*nix-command' "$uconf" \
-  && grep -Eqs 'experimental-features.*flakes' "$uconf"; then
-  pass "flakes/nix-command persisted for '${user}' (~/.config/nix/nix.conf)"
-elif grep -Eqs 'experimental-features.*nix-command' "$sys_conf"; then
+# 6. flakes / nix-command bootstrap status. BOTH features are required (see
+#    features_enabled); the user-config and system-config checks use one rule.
+uconf="${TANDEM_USER_NIX_CONF:-$(getent passwd "$user" 2>/dev/null | cut -d: -f6)/.config/nix/nix.conf}"
+if features_enabled "$uconf"; then
+  pass "flakes/nix-command persisted for '${user}' (${uconf})"
+elif features_enabled "$sys_conf"; then
   pass "flakes/nix-command enabled system-wide (${sys_conf})"
 else
   warn "flakes/nix-command not yet persisted for '${user}'; the FIRST deploy must use: nix --extra-experimental-features 'nix-command flakes' run .#deploy"

@@ -89,18 +89,26 @@ sudo ./deploy/arch/bootstrap.sh --apply    # idempotent minimal setup
 On a fresh Arch host, installing the `nix` package is **not** enough to run
 `nix run .#deploy`. `bootstrap.sh --apply` closes the gaps, and the chain is:
 
+The specifics below were **verified on the target Arch host with nix `2.34.8-1`**; they are
+not a claim about every future Arch package. The *implementation* stays version-agnostic —
+it discovers the packaged unit, reads actual `systemctl` state, and tests real target-user
+daemon connectivity rather than hard-coding any of this.
+
 1. **Daemon.** The Arch `nix` package ships the systemd units but (per Arch policy) does
    not enable them. Bootstrap enables the packaged **`nix-daemon.service`** (idempotent).
-   *Evidence:* the package installs `/usr/lib/systemd/system/nix-daemon.{service,socket}`;
-   we standardize on the always-on service to avoid a socket-vs-service bind conflict.
-2. **User access — no group needed.** The current Arch package creates **no `nix-users`
-   group**; the daemon socket `/nix/var/nix/daemon-socket/socket` is mode `0666`, so any
-   user can connect. Bootstrap adds no group, so **no logout/login is required**. Verify:
+   *Evidence (verified on-host, nix `2.34.8-1`):* the package installs
+   `/usr/lib/systemd/system/nix-daemon.{service,socket}`; we standardize on the always-on
+   service to avoid a socket-vs-service bind conflict.
+2. **User access — no group needed.** As verified on-host (nix `2.34.8-1`), the Arch
+   package creates **no `nix-users` group**; the daemon socket
+   `/nix/var/nix/daemon-socket/socket` is mode `0666`, so any user can connect. Bootstrap
+   adds no group, so **no logout/login is required**. Verify:
    ```sh
    sudo -iu tandem nix --extra-experimental-features nix-command store info --store daemon
    ```
-3. **Flakes.** The pristine package `/etc/nix/nix.conf` does **not** enable
-   `nix-command`/`flakes`. So the **first** deploy passes them explicitly, once:
+3. **Flakes.** The pristine package `/etc/nix/nix.conf` (as verified on-host, nix
+   `2.34.8-1`) does **not** enable `nix-command`/`flakes`. So the **first** deploy passes
+   them explicitly, once:
    ```sh
    sudo -iu tandem bash -lc 'cd /path/to/tandem && \
      nix --extra-experimental-features "nix-command flakes" run .#deploy'

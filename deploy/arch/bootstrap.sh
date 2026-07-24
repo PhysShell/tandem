@@ -191,16 +191,25 @@ for d in "$home/.config" "$home/.local/state" "$home/.local/state/nix"; do
 done
 
 echo
-echo "bootstrap --apply: done. Re-running read-only checks:"
+echo "bootstrap --apply: mutations complete. Verifying postconditions:"
 echo
-"$here/check-host.sh" --user "$user" || true
+# Propagate the actual exit status: a hard FAIL from check-host (e.g. the target
+# user cannot reach the Nix daemon) makes --apply fail. `set -e` aborts here on a
+# nonzero exit, so the success banner below is only reached when postconditions
+# hold. WARN-only results (e.g. flakes not yet persisted before the first deploy,
+# or public-listener advisories) keep check-host at exit 0 and are not failures.
+"$here/check-host.sh" --user "$user"
+
+echo
+echo "bootstrap --apply: done."
 
 cat <<EOF
 
 Nix daemon access & first deployment
-  * No re-login is required for Nix: the current Arch 'nix' package needs NO
-    supplementary group (the daemon socket /nix/var/nix/daemon-socket/socket is
-    mode 0666). We add no group, so there is nothing to re-login for.
+  * No re-login is required for Nix: the Arch 'nix' package (verified with nix
+    2.34.8-1) needs NO supplementary group — its daemon socket
+    /nix/var/nix/daemon-socket/socket is mode 0666. We add no group, so there is
+    nothing to re-login for. (The check reports actual connectivity, not a version.)
   * Test daemon access as ${user}:
         sudo -iu ${user} nix --extra-experimental-features nix-command \\
             store info --store daemon

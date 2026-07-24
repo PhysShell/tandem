@@ -2,8 +2,9 @@
 # Persist the Nix experimental features the flake workflow needs, per user.
 #
 # The Arch `nix` package ships /etc/nix/nix.conf WITHOUT experimental features
-# (verified against the pristine package: it contains only `build-users-group =
-# nixbld`). So on a clean Arch host the FIRST deployment must pass the features
+# (verified on the target host with nix 2.34.8-1: the pristine file contains only
+# `build-users-group = nixbld`). So on a clean Arch host the FIRST deployment must
+# pass the features
 # explicitly:
 #
 #   nix --extra-experimental-features 'nix-command flakes' run .#deploy
