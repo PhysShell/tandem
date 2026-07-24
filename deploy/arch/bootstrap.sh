@@ -1,0 +1,170 @@
+#!/usr/bin/env bash
+#
+# tandem Arch bootstrap — the minimal ROOT-owned host foundation for a
+# phone-first 007 workstation.
+#
+# Explicit mode is mandatory; there is no silent default and no default that
+# mutates:
+#
+#     sudo ./deploy/arch/bootstrap.sh --check [--user NAME]   # read-only
+#     sudo ./deploy/arch/bootstrap.sh --apply [--user NAME]   # mutating, idempotent
+#
+# --apply is idempotent by construction: it only installs packages whose marker
+# binary is missing, uses `systemctl enable --now` / `loginctl enable-linger`
+# (both idempotent), and `install -d` (create-if-absent). Running it twice makes
+# no further changes.
+#
+# ---------------------------------------------------------------------------
+# PROHIBITIONS — this script MUST NOT, and does NOT:
+#   * run `tailscale up`, embed/accept a Tailscale auth key, edit ACLs, set DNS,
+#     configure an exit node, or expose a Funnel;
+#   * rewrite the firewall or open public ports;
+#   * modify SSH authorized_keys, or generate/copy any private key;
+#   * change the login shell of any user;
+#   * install Claude/Codex credentials, or write OAuth/session files anywhere;
+#   * migrate the host to NixOS, or install system-manager.
+# Joining the tailnet (`tailscale up`) is a MANUAL operator step, on purpose.
+# ---------------------------------------------------------------------------
+set -euo pipefail
+
+here="$(cd "$(dirname "$0")" && pwd)"
+user="tandem"
+mode=""
+
+usage() {
+  cat >&2 <<EOF
+usage:
+  sudo $0 --check [--user NAME]   read-only host inspection (no changes)
+  sudo $0 --apply [--user NAME]   install & enable the minimal host foundation
+
+Exactly one of --check / --apply is required. The default is NEVER to mutate.
+--user defaults to 'tandem'.
+EOF
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+  --check)
+    mode="check"
+    shift
+    ;;
+  --apply)
+    mode="apply"
+    shift
+    ;;
+  --user)
+    user="${2:?--user needs a value}"
+    shift 2
+    ;;
+  --user=*)
+    user="${1#*=}"
+    shift
+    ;;
+  -h | --help)
+    usage
+    exit 0
+    ;;
+  *)
+    echo "bootstrap: unknown argument: $1" >&2
+    usage
+    exit 2
+    ;;
+  esac
+done
+
+if [ -z "$mode" ]; then
+  echo "bootstrap: no mode given — refusing to do anything (this is not an error you should silence)." >&2
+  usage
+  exit 2
+fi
+
+# --check delegates to the read-only host inspector (also CI-safe).
+if [ "$mode" = "check" ]; then
+  exec "$here/check-host.sh" --user "$user"
+fi
+
+# -------------------------------- --apply ----------------------------------
+if [ "$(id -u)" -ne 0 ]; then
+  echo "bootstrap --apply: must run as root (use sudo)." >&2
+  exit 1
+fi
+
+if ! getent passwd "$user" >/dev/null 2>&1; then
+  echo "bootstrap --apply: target user '$user' does not exist; create it first." >&2
+  echo "  tandem never creates or deletes users. For the staging user see docs/staging.md." >&2
+  exit 1
+fi
+
+echo "bootstrap --apply: target user = ${user}"
+echo
+
+# 1. Install missing required Arch packages. Idempotent: only packages whose
+#    marker binary is absent are installed (so a Nix installed by other means is
+#    respected, never reinstalled from pacman).
+marker_present() {
+  case "$1" in
+  openssh) command -v sshd >/dev/null 2>&1 ;;
+  tailscale) command -v tailscale >/dev/null 2>&1 ;;
+  mosh) command -v mosh-server >/dev/null 2>&1 ;;
+  nix) command -v nix >/dev/null 2>&1 ;;
+  *) return 1 ;;
+  esac
+}
+
+to_install=()
+for pkg in openssh tailscale mosh nix; do
+  if marker_present "$pkg"; then
+    echo "  package ${pkg}: present, skipping"
+  else
+    to_install+=("$pkg")
+  fi
+done
+
+if [ "${#to_install[@]}" -gt 0 ]; then
+  echo "  installing: ${to_install[*]}"
+  # No `-y` refresh / `-u` upgrade: tandem does not perform automatic Arch
+  # upgrades. If the local package DB is too stale to resolve these, the
+  # operator runs a full `pacman -Syu` (a change they control) and re-applies.
+  if ! pacman -S --needed --noconfirm "${to_install[@]}"; then
+    echo "  pacman could not install the required packages." >&2
+    echo "  Your package DB may be stale. Run 'sudo pacman -Syu' (a system upgrade you" >&2
+    echo "  control), then re-run: sudo $0 --apply --user ${user}" >&2
+    exit 1
+  fi
+else
+  echo "  all required packages already present"
+fi
+
+# 2. Enable + start the two required system daemons. Idempotent.
+echo
+for unit in sshd tailscaled; do
+  echo "  enabling ${unit} (enable --now)"
+  systemctl enable --now "$unit"
+done
+
+# 3. Enable user lingering so tmux / the future o7d survive logout. Idempotent.
+echo
+echo "  enabling lingering for ${user}"
+loginctl enable-linger "$user"
+
+# 4. Create required user directories with correct ownership. Idempotent.
+echo
+home="$(getent passwd "$user" | cut -d: -f6)"
+group="$(id -gn "$user")"
+for d in "$home/.config" "$home/.local/state" "$home/.local/state/nix"; do
+  echo "  ensuring dir ${d} (owner ${user}:${group})"
+  install -d -o "$user" -g "$group" -m 0755 "$d"
+done
+
+echo
+echo "bootstrap --apply: done. Re-running read-only checks:"
+echo
+"$here/check-host.sh" --user "$user" || true
+
+cat <<EOF
+
+MANUAL follow-ups — bootstrap deliberately does NOT do these:
+  * Join the tailnet (interactive; no key is embedded):   sudo tailscale up
+  * Review any non-loopback listeners printed above and your firewall policy by hand.
+  * Deploy the user environment as ${user}:               nix run .#deploy
+EOF
